@@ -20,8 +20,12 @@
  */
 
 /* 1MB RAM at 0x00000, I/O at 0xf00000 */
+/* DUART from 0x00f00000 to 0x00f0001f */
 
 #define RAM_SIZE (1<<20)
+
+#define DUART_START	0x00f00000
+#define DUART_END	0x00f0001f
 
 /* Executables get loaded at this address by the ROM. */
 /* The kernel will relocate itself to a lower address. */
@@ -154,9 +158,9 @@ static unsigned int do_io_readb(unsigned int address)
 	if (address >= 0xFFE000 && address <= 0xFFEFFF)
 		return ide_read8(ide, (address & 31) >> 1);
 	/* DUART */
-	if (!(address & 1))
-		return 0x00;
-	return duart_read(duart, address >> 1);
+	if (address >= DUART_START && address <= DUART_END)
+	  return duart_read(duart, address >> 1);
+	return 0x00;
 }
 
 static void do_io_writeb(unsigned int address, unsigned int value)
@@ -178,7 +182,7 @@ static void do_io_writeb(unsigned int address, unsigned int value)
 		return;
 	}
 	/* DUART */
-	if (address & 1)
+	if (address >= DUART_START && address <= DUART_END)
 		duart_write(duart, address >> 1, value);
 }
 
