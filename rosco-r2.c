@@ -23,8 +23,9 @@
 
 #define RAM_SIZE (1<<20)
 
-/* Executables get loaded at this address */
-#define DEFAULT_ADDRESS 0x400
+/* Executables get loaded at this address by the ROM. */
+/* The kernel will relocate itself to a lower address. */
+#define DEFAULT_ADDRESS 0x40000
 
 static uint8_t ram[RAM_SIZE];
 /* IDE controller */
