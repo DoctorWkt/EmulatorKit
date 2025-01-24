@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <m68k.h>
 #include <arpa/inet.h>
+#include "ide.h"
 #include "duart.h"
 
 /* Emulator for the Rosco r2 m68k SBC:
@@ -20,14 +21,17 @@
 
 /* 1MB RAM at 0x00000, I/O at 0xf00000 */
 
-#define RAM_SIZE (1 << 20)
-static uint8_t ram[RAM_SIZE];
-
-/* 68681 */
-static struct duart *duart;
+#define RAM_SIZE (1<<20)
 
 /* Executables get loaded at this address */
-#define DEFAULT_ADDRESS 0x40000
+#define DEFAULT_ADDRESS 0x400
+
+static uint8_t ram[RAM_SIZE];
+/* IDE controller */
+static struct ide_controller *ide;
+/* 68681 */
+static struct duart *duart;
+static int rcbus;
 
 static int trace = 0;
 
@@ -112,6 +116,19 @@ void recalc_interrupts(void)
 		m68k_set_irq(0);
 }
 
+/* Until we plug any RC2014 emulation into this */
+
+static uint8_t rcbus_inb(uint8_t address)
+{
+	return 0xFF;
+}
+
+static void rcbus_outb(uint8_t address, uint8_t data)
+{
+}
+
+
+
 int cpu_irq_ack(int level)
 {
 	if (!(irq_pending & (1 << level)))
@@ -126,6 +143,15 @@ int cpu_irq_ack(int level)
 
 static unsigned int do_io_readb(unsigned int address)
 {
+	if (rcbus && address >= 0xFF8000 && address <= 0xFF8FFF)
+		return rcbus_inb(((address - 0xFF8000) >> 1) & 0xFF);
+	/* SPI is not modelled */
+	if (address >= 0xFFD000 && address <= 0xFFDFFF)
+		return 0xFF;
+	/* ATA CF */
+	/* FIXME: FFE010-01F sets CS1 */
+	if (address >= 0xFFE000 && address <= 0xFFEFFF)
+		return ide_read8(ide, (address & 31) >> 1);
 	/* DUART */
 	if (!(address & 1))
 		return 0x00;
@@ -138,6 +164,18 @@ static void do_io_writeb(unsigned int address, unsigned int value)
 		printf("<%c>", value);
 		return;
 	}
+	if (rcbus && address >= 0xFF8000 && address <= 0xFF8FFF) {
+		rcbus_outb(((address - 0xFF8000) >> 1) & 0xFF, value);
+		return;
+	}
+	/* SPI is not modelled */
+	if (address >= 0xFFD000 && address <= 0xFFDFFF)
+		return;
+	/* ATA CF */
+	if (address >= 0xFFE000 && address <= 0xFFEFFF) {
+		ide_write8(ide, (address & 31) >> 1, value);
+		return;
+	}
 	/* DUART */
 	if (address & 1)
 		duart_write(duart, address >> 1, value);
@@ -147,6 +185,15 @@ static void do_io_writeb(unsigned int address, unsigned int value)
 unsigned int do_cpu_read_byte(unsigned int address)
 {
 	address &= 0xFFFFFF;
+	if (rcbus) {
+		/* Musashi can't emulate this properly it seems */
+		if (address >= 0x800000 && address <= 0xFF8000) {
+			fprintf(stderr, "R: bus error at %d\n", address);
+			return 0xFF;
+		}
+		if (address <= 0xFF8000)
+			address &= 0x1FFFFF;
+	}
 	if (address < sizeof(ram))
 		return ram[address];
 	return do_io_readb(address);
@@ -165,8 +212,19 @@ unsigned int do_cpu_read_word(unsigned int address)
 {
 	address &= 0xFFFFFF;
 
+	if (rcbus) {
+		if (address >= 0x800000 && address < 0xFF8000) {
+			fprintf(stderr, "R: bus error at %d\n", address);
+			return 0xFFFF;
+		}
+		/* RAM wraps four times */
+		if (address <= 0xFF8000)
+			address &= 0x1FFFFF;
+	}
 	if (address < sizeof(ram) - 1)
 		return READ_WORD(ram, address);
+	else if (address >= 0xFFE000 && address <= 0xFFEFFF)
+		return ide_read16(ide, (address & 31) >> 1);
 	return (do_cpu_read_byte(address) << 8) | do_cpu_read_byte(address + 1);
 }
 
@@ -203,6 +261,14 @@ void cpu_write_byte(unsigned int address, unsigned int value)
 	if (trace & TRACE_MEM)
 		fprintf(stderr, "WB %06X <- %02X\n", address, value);
 
+	if (rcbus) {
+		if (address >= 0x800000 && address <= 0xFF8000) {
+			fprintf(stderr, "W: bus error at %06X\n", address);
+			return;
+		}
+		if (address <= 0xFF8000)
+			address &= 0x1FFFFF;
+	}
 	if (address < sizeof(ram))
 		ram[address] = value;
 	else
@@ -216,9 +282,19 @@ void cpu_write_word(unsigned int address, unsigned int value)
 	if (trace & TRACE_MEM)
 		fprintf(stderr, "WW %06X <- %04X\n", address, value);
 
+	if (rcbus) {
+		if (address >= 0x800000 && address <= 0xFF8000) {
+			fprintf(stderr, "W: bus error at %06X\n", address);
+			return;
+		}
+		if (address <= 0xFF8000)
+			address &= 0x1FFFFF;
+	}
 	if (address < sizeof(ram) - 1) {
 		WRITE_WORD(ram, address, value);
-	} else {
+	} else if (address >= 0xFFE000 && address <= 0xFFEFFF)
+		ide_write16(ide, (address & 31) >> 1, value);
+	else {
 		/* Corner cases */
 		cpu_write_byte(address, value >> 8);
 		cpu_write_byte(address + 1, value & 0xFF);
@@ -254,6 +330,7 @@ void cpu_instr_callback(void)
 static void device_init(void)
 {
 	irq_pending = 0;
+	ide_reset_begin(ide);
 	duart_reset(duart);
 	duart_set_input(duart, 1);
 }
@@ -292,7 +369,7 @@ void cpu_set_fc(int fc)
 
 void usage(void)
 {
-	fprintf(stderr, "tiny68k [-0][-1][-2][-e][-R][-d debug] fuzix.bin.\n");
+	fprintf(stderr, "tiny68k [-0][-1][-2][-e][-R][-i idepath][-d debug] fuzix.bin.\n");
 	exit(1);
 }
 
@@ -303,8 +380,9 @@ int main(int argc, char *argv[])
 	int fast = 0;
 	int opt;
 	uint8_t *ptr;
+	const char *diskname = "tiny68k.ide";
 
-	while((opt = getopt(argc, argv, "012efd:r:")) != -1) {
+	while((opt = getopt(argc, argv, "012eRfd:i:")) != -1) {
 		switch(opt) {
 		case '0':
 			cputype = M68K_CPU_TYPE_68000;
@@ -318,12 +396,17 @@ int main(int argc, char *argv[])
 		case 'e':
 			cputype = M68K_CPU_TYPE_68EC020;
 			break;
+		case 'R':
+			rcbus = 1;
 			break;
 		case 'f':
 			fast = 1;
 			break;
 		case 'd':
 			trace = atoi(optarg);
+			break;
+		case 'i':
+			diskname = optarg;
 			break;
 		default:
 			usage();
@@ -347,29 +430,40 @@ int main(int argc, char *argv[])
 		tcsetattr(0, 0, &term);
 	}
 
-	if (optind == argc)
-		usage();
+        if (optind == argc)
+                usage();
 
-	/* Fill RAM with 0xA7 */
-	memset(ram, 0xA7, sizeof(ram));
+        /* Fill RAM with 0xA7 */
+        memset(ram, 0xA7, sizeof(ram));
 
-	/* Load fuzix.img at the DEFAULT_ADDRESS */
-	fd = open(argv[optind], O_RDONLY);
-	if (fd == -1) {
+        /* Load fuzix.img at the DEFAULT_ADDRESS */
+        fd = open(argv[optind], O_RDONLY);
+        if (fd == -1) {
                 perror(argv[optind]);
                 exit(1);
         }
-	ptr= &ram[DEFAULT_ADDRESS];
-	while ((cnt=read(fd, ptr, 4096))>0)
-		ptr += cnt;
-	close(fd);
+        ptr= &ram[DEFAULT_ADDRESS];
+        while ((cnt=read(fd, ptr, 4096))>0)
+                ptr += cnt;
+        close(fd);
 
-	/* We start directly in the executable */
-	/* without running any ROM code */
-	uint32_t be_start = htobe32(DEFAULT_ADDRESS);
-	uint32_t be_stkptr = htobe32(RAM_SIZE);
-	memcpy(ram, (void *) &be_stkptr, 4);
-	memcpy(&(ram[4]), (void *) &be_start, 4);
+        /* We start directly in the executable */
+        /* without running any ROM code */
+        uint32_t be_start = htobe32(DEFAULT_ADDRESS);
+        uint32_t be_stkptr = htobe32(RAM_SIZE);
+        memcpy(ram, (void *) &be_stkptr, 4);
+        memcpy(&(ram[4]), (void *) &be_start, 4);
+
+	fd = open(diskname, O_RDWR);
+	if (fd == -1) {
+		perror(diskname);
+		exit(1);
+	}
+	ide = ide_allocate("hd0");
+	if (ide == NULL)
+		exit(1);
+	if (ide_attach(ide, 0, fd))
+		exit(1);
 
 	duart = duart_create();
 	if (trace & TRACE_DUART)
