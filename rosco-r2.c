@@ -292,15 +292,17 @@ void cpu_set_fc(int fc)
 
 void usage(void)
 {
-	fprintf(stderr, "tiny68k [-0][-1][-2][-e][-R][-d debug].\n");
+	fprintf(stderr, "tiny68k [-0][-1][-2][-e][-R][-d debug] fuzix.img.\n");
 	exit(1);
 }
 
 int main(int argc, char *argv[])
 {
+	int fd, cnt;
 	int cputype = M68K_CPU_TYPE_68000;
 	int fast = 0;
 	int opt;
+	uint8_t *ptr;
 
 	while((opt = getopt(argc, argv, "012efd:r:")) != -1) {
 		switch(opt) {
@@ -345,10 +347,22 @@ int main(int argc, char *argv[])
 		tcsetattr(0, 0, &term);
 	}
 
-	if (optind < argc)
+	if (optind == argc)
 		usage();
 
+	/* Fill RAM with 0xA7 */
 	memset(ram, 0xA7, sizeof(ram));
+
+	/* Load fuzix.img at the DEFAULT_ADDRESS */
+	fd = open(argv[optind], O_RDONLY);
+	if (fd == -1) {
+                perror(argv[optind]);
+                exit(1);
+        }
+	ptr= &ram[DEFAULT_ADDRESS];
+	while ((cnt=read(fd, ptr, 4096))>0)
+		ptr += cnt;
+	close(fd);
 
 	/* We start directly in the executable */
 	/* without running any ROM code */
