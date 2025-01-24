@@ -292,7 +292,7 @@ void cpu_set_fc(int fc)
 
 void usage(void)
 {
-	fprintf(stderr, "tiny68k [-0][-1][-2][-e][-R][-d debug] fuzix.img.\n");
+	fprintf(stderr, "tiny68k [-0][-1][-2][-e][-R][-d debug] fuzix.bin.\n");
 	exit(1);
 }
 
