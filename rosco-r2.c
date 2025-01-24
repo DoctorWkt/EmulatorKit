@@ -20,10 +20,14 @@
 
 /* 1MB RAM at 0x00000, I/O at 0xf00000 */
 
-static uint8_t ram[(1 << 20)];
+#define RAM_SIZE (1 << 20)
+static uint8_t ram[RAM_SIZE];
 
 /* 68681 */
 static struct duart *duart;
+
+/* Executables get loaded at this address */
+#define DEFAULT_ADDRESS 0x40000
 
 static int trace = 0;
 
@@ -139,7 +143,7 @@ static void do_io_writeb(unsigned int address, unsigned int value)
 		duart_write(duart, address >> 1, value);
 }
 
-/* Read data from RAM, ROM, or a device */
+/* Read data from RAM or a device */
 unsigned int do_cpu_read_byte(unsigned int address)
 {
 	address &= 0xFFFFFF;
@@ -288,17 +292,15 @@ void cpu_set_fc(int fc)
 
 void usage(void)
 {
-	fprintf(stderr, "tiny68k [-0][-1][-2][-e][-R][-r rompath][-d debug].\n");
+	fprintf(stderr, "tiny68k [-0][-1][-2][-e][-R][-d debug].\n");
 	exit(1);
 }
 
 int main(int argc, char *argv[])
 {
-	int fd;
 	int cputype = M68K_CPU_TYPE_68000;
 	int fast = 0;
 	int opt;
-	const char *romname = "tiny68k.rom";
 
 	while((opt = getopt(argc, argv, "012efd:r:")) != -1) {
 		switch(opt) {
@@ -320,9 +322,6 @@ int main(int argc, char *argv[])
 			break;
 		case 'd':
 			trace = atoi(optarg);
-			break;
-		case 'r':
-			romname = optarg;
 			break;
 		default:
 			usage();
@@ -351,16 +350,12 @@ int main(int argc, char *argv[])
 
 	memset(ram, 0xA7, sizeof(ram));
 
-	fd = open(romname, O_RDONLY);
-	if (fd == -1) {
-		perror(romname);
-		exit(1);
-	}
-	if (read(fd, ram, 0x8000) < 0x1000) {
-		fprintf(stderr, "%s: too short.\n", romname);
-		exit(1);
-	}
-	close(fd);
+	/* We start directly in the executable */
+	/* without running any ROM code */
+	uint32_t be_start = htobe32(DEFAULT_ADDRESS);
+	uint32_t be_stkptr = htobe32(RAM_SIZE);
+	memcpy(ram, (void *) &be_stkptr, 4);
+	memcpy(&(ram[4]), (void *) &be_start, 4);
 
 	duart = duart_create();
 	if (trace & TRACE_DUART)
