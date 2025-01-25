@@ -32,6 +32,8 @@ struct duart {
 	uint8_t irq;
 	int input;		/* Which port if any is console */
 	int trace;		/* Debug trace */
+	uint8_t (*ip_fn)(void);	/* Return a value from the input port */
+	void (*opcr_fn)(uint8_t); /* Send/set a value on the input port */
 };
 
 static void duart_irq_calc(struct duart *d)
@@ -247,7 +249,10 @@ uint8_t do_duart_read(struct duart *d, uint16_t address)
 	case 0x0C:		/* IVR */
 		return d->ivr;
 	case 0x0D:		/* IP */
-		return 0xff;	/* d->ip; */
+		if (d->ip_fn!=NULL)
+			return (d->ip_fn());
+		else
+			return 0xff;
 	case 0x0E:		/* START */
 		d->ct = d->ctr;
 		d->ctstop = 0;
@@ -333,12 +338,18 @@ void duart_write(struct duart *d, uint16_t address, uint8_t value)
 		break;
 	case 0x0D:
 		d->opcr = value;
+		if (d->opcr_fn!=NULL)
+			d->opcr_fn(d->opcr);
 		break;
 	case 0x0E:
 		d->opcr |= value;
+		if (d->opcr_fn!=NULL)
+			d->opcr_fn(d->opcr);
 		break;
 	case 0x0F:
 		d->opcr &= ~value;
+		if (d->opcr_fn!=NULL)
+			d->opcr_fn(d->opcr);
 		break;
 	}
 	if (bgrc && d->trace) {
@@ -372,6 +383,13 @@ struct duart *duart_create(void)
 	memset(d, 0, sizeof(*d));
 	duart_reset(d);
 	return d;
+}
+
+void duart_port_functions(struct duart *d,
+	uint8_t (*in)(void), void (*out)(uint8_t))
+{
+  d->ip_fn= in;
+  d->opcr_fn= out;
 }
 
 void duart_free(struct duart *d)

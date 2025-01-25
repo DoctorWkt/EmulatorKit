@@ -8,6 +8,8 @@ extern void duart_write(struct duart *duart, uint16_t addr, uint8_t val);
 extern void duart_tick(struct duart *duart);
 extern void duart_reset(struct duart *duart);
 extern uint8_t duart_irq_pending(struct duart *duart);
+extern void duart_port_functions(struct duart *d,
+        uint8_t (*in)(void), void (*out)(uint8_t));
 extern void duart_set_input(struct duart *duart, int port);
 extern uint8_t duart_vector(struct duart *duart);
 
