@@ -14,9 +14,11 @@
 #include <m68kcpu.h>
 #include <arpa/inet.h>
 #include "ide.h"
+#include "sdcard.h"
 #include "duart.h"
 #include "mapfile.h"
 #include "monitor.h"
+
 
 /* Emulator for the Rosco r2 m68k SBC:
  * https://store.rosco-m68k.com/products/rosco-m68k-classic-v2-full-kit
@@ -35,8 +37,13 @@
 #define DEFAULT_ADDRESS 0x40000
 
 static uint8_t ram[RAM_SIZE];
+
 /* IDE controller */
 static struct ide_controller *ide;
+
+/* SD card */
+struct sdcard *sd;
+
 /* 68681 */
 static struct duart *duart;
 
@@ -48,6 +55,7 @@ static unsigned write_brkpt = 0;
 #define TRACE_MEM	1
 #define TRACE_CPU	2
 #define TRACE_DUART	4
+#define TRACE_SD	8
 
 uint8_t fc;
 
@@ -381,7 +389,7 @@ void cpu_set_fc(int fc)
 
 void usage(void)
 {
-	fprintf(stderr, "rosco-r2 [-0][-1][-2][-e][-m][-M mapfile][-i idepath][-d debug] fuzix.bin\n");
+	fprintf(stderr, "rosco-r2 [-m][-b brkpt][-M mapfile][-i idepath][-s sdpath][-d debug] fuzix.bin\n");
 	exit(1);
 }
 
@@ -396,6 +404,7 @@ int main(int argc, char *argv[])
 	int opt;
 	uint8_t *ptr;
 	const char *diskname = "rosco-r2.ide";
+	const char *sdname = NULL;
 	int start_in_monitor = 0;
 	char **brkstr;                /* Array of breakpoint strings */
 
@@ -406,7 +415,7 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	while((opt = getopt(argc, argv, "mb:M:d:i:")) != -1) {
+	while((opt = getopt(argc, argv, "mb:M:d:i:s:")) != -1) {
 		switch(opt) {
    		case 'm':
       			start_in_monitor = 1;
@@ -423,6 +432,9 @@ int main(int argc, char *argv[])
 			break;
 		case 'i':
 			diskname = optarg;
+			break;
+		case 's':
+			sdname = optarg;
 			break;
 		default:
 			usage();
@@ -476,6 +488,18 @@ int main(int argc, char *argv[])
 		exit(1);
 	if (ide_attach(ide, 0, fd))
 		exit(1);
+
+        if (sdname) {
+                fd = open(sdname, O_RDWR);
+                if (fd == -1) {
+                        perror(sdname);
+                        exit(1);
+                }
+                sd = sd_create("sd0");
+                sd_reset(sd);
+                sd_attach(sd, fd);
+                sd_trace(sd, trace & TRACE_SD);
+        }
 
 	duart = duart_create();
 	if (trace & TRACE_DUART)
