@@ -510,9 +510,9 @@ int main(int argc, char *argv[])
         	    	m68ki_cpu.pc = pc;
     	        }
 		m68k_execute(1);
-		/* Do a tick every 1000 instructions */
+		/* Do a tick every 100 instructions */
 		duart_cnt++;
-		if (duart_cnt == 1000) {
+		if (duart_cnt == 100) {
 			duart_tick(duart);
 			duart_cnt=0;
 		}
