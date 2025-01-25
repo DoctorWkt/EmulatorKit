@@ -1,0 +1,190 @@
+// Code to deal with a mapfile.
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <err.h>
+#include <regex.h>
+
+int mapfile_loaded = 0;		// Set to 1 if loaded
+
+struct mapentry {
+  unsigned int addr;		// Address of symbol
+  char *sym;			// Symbol at this address
+};
+
+// Eventually, the array of mapentries sorted by address
+static struct mapentry *maparray = NULL;
+
+// Index of the most recently used mapentry
+// and the count of valid mapentries
+static int mapidx = 0;
+static int mapcnt = 0;
+
+// Compare mapentries by address, for qsort()
+static int mapcompare(const void *a, const void *b) {
+  struct mapentry *c, *d;
+
+  c = (struct mapentry *) a;
+  d = (struct mapentry *) b;
+  return (c->addr - d->addr);
+}
+
+#define ARRAY_SIZE(arr) (sizeof((arr)) / sizeof((arr)[0]))
+
+// Read the code symbols in from the mapfile
+// and build the maparray. We are searching for
+// <whitespace>0x<hex digits><whitespace><symbol name>
+void read_mapfile(char *filename) {
+  FILE *zin;
+  char buf[1024];
+  int i = 0;
+  char *re;
+  regex_t regex;
+  regmatch_t pmatch[3];
+
+  // Free any existing map entries in case
+  // we get called multiple times
+  if (maparray != NULL) {
+    for (i = 0; i < mapcnt; i++)
+      free(maparray[i].sym);
+    free(maparray);
+    mapidx = mapcnt = 0;
+  }
+  // Set up the regular expression we use
+  // to match entries in the file
+  re = "^  *0x([0-9A-Z][0-9A-Z]*)  *(\\w\\w*)";
+  if (regcomp(&regex, re, REG_ICASE | REG_EXTENDED))
+    errx(EXIT_FAILURE, "regcomp failed");
+
+  // Open the file, read in each line and count
+  // lines that match the regular expression
+  zin = fopen(filename, "r");
+  if (zin == NULL) {
+    warnx("Unable to open %s\n", filename);
+    return;
+  }
+
+  while (1) {
+    if (fgets(buf, 1023, zin) == NULL)
+      break;
+    if (regexec(&regex, buf, ARRAY_SIZE(pmatch), pmatch, 0) == 0) {
+      mapcnt++;
+    }
+  }
+  fclose(zin);
+
+  // Build the array of map entries.
+  // Add room for an extra empty element.
+  maparray =
+    (struct mapentry *) malloc((mapcnt + 1) * sizeof(struct mapentry));
+  if (maparray == NULL)
+    err(EXIT_FAILURE, NULL);
+
+  // Now re-read the file, extracting the symbol and address
+  zin = fopen(filename, "r");
+
+  while (1) {
+    if (fgets(buf, 1023, zin) == NULL)
+      break;
+    if (regexec(&regex, buf, ARRAY_SIZE(pmatch), pmatch, 0) == 0) {
+      // Convert the hex address into decimal
+      maparray[i].addr = strtol(&(buf[pmatch[1].rm_so]), NULL, 16);
+
+      // Terminate the symbol's name with a NUL
+      // before we try to strdup() it
+      buf[pmatch[2].rm_eo] = '\0';
+      maparray[i].sym = strdup(&(buf[pmatch[2].rm_so]));
+      i++;
+    }
+  }
+  fclose(zin);
+  regfree(&regex);
+
+  // Sort the array by address
+  qsort(maparray, mapcnt, sizeof(struct mapentry), mapcompare);
+
+  // Add a final entry so we can
+  // index one past the end
+  maparray[mapcnt].addr = 0xFFFF;
+  maparray[mapcnt].sym = NULL;
+  mapfile_loaded = 1;
+}
+
+// Given a string, return the address of that symbol
+// or -1 if the symbol is not found
+int get_sym_address(char *sym) {
+  int i;
+
+  if (sym == NULL || *sym == '\0')
+    return (-1);
+
+  for (i = 0; i < mapcnt; i++) {
+    if (!strcmp(maparray[i].sym, sym))
+      return (maparray[i].addr);
+  }
+  return (-1);
+}
+
+// Given a string, return the end address of
+// the symbol, i.e. one below the next symbol
+// or -1 if the symbol is not found
+int get_sym_end_address(char *sym) {
+  int i, j;
+
+  if (sym == NULL || *sym == '\0')
+    return (-1);
+
+  // Find the index of the symbol
+  for (i = 0; i < mapcnt; i++)
+    if (!strcmp(maparray[i].sym, sym))
+      break;
+
+  // Symbol not found, return error
+  if (i == mapcnt)
+    return (-1);
+
+  // Now find the next map entry
+  // with a higher address. We
+  // can go past the end with the
+  // extra element
+  for (j = i + 1; j <= mapcnt; j++)
+    if (maparray[j].addr > maparray[i].addr)
+      return (maparray[j].addr - 1);
+
+  // No symbol with a higher address, error
+  return (-1);
+}
+
+// Given an address, return a string which
+// has the nearest symbol below the address.
+// Also return, through a pointer, the offset
+// of the address fom the symbol.
+// If NULL is returned, there is is no nearest symbol.
+char *get_symbol_and_offset(unsigned int addr, int *offset) {
+
+  // No symbols
+  if (mapcnt == 0)
+    return (NULL);
+
+  // Error check
+  if (offset == NULL)
+    return (NULL);
+
+  // mapidx points at the last symbol used. If the address
+  // is at/between this symbol and the next one, use it
+  if ((maparray[mapidx].addr <= addr) && (maparray[mapidx + 1].addr > addr)) {
+    *offset = addr - maparray[mapidx].addr;
+    return (maparray[mapidx].sym);
+  }
+  // No luck. Search the whole list to find a suitable symbol
+  for (mapidx = 0; mapidx < mapcnt; mapidx++) {
+    if ((maparray[mapidx].addr <= addr) && (maparray[mapidx + 1].addr > addr)) {
+      *offset = addr - maparray[mapidx].addr;
+      return (maparray[mapidx].sym);
+    }
+  }
+
+  // No symbol found, give up
+  return (NULL);
+}

@@ -11,9 +11,12 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <m68k.h>
+#include <m68kcpu.h>
 #include <arpa/inet.h>
 #include "ide.h"
 #include "duart.h"
+#include "mapfile.h"
+#include "monitor.h"
 
 /* Emulator for the Rosco r2 m68k SBC:
  * https://store.rosco-m68k.com/products/rosco-m68k-classic-v2-full-kit
@@ -36,9 +39,11 @@ static uint8_t ram[RAM_SIZE];
 static struct ide_controller *ide;
 /* 68681 */
 static struct duart *duart;
-static int rcbus;
 
 static int trace = 0;
+
+/* If 1, we hit a write breakpoint */
+static unsigned write_brkpt = 0;
 
 #define TRACE_MEM	1
 #define TRACE_CPU	2
@@ -121,19 +126,6 @@ void recalc_interrupts(void)
 		m68k_set_irq(0);
 }
 
-/* Until we plug any RC2014 emulation into this */
-
-static uint8_t rcbus_inb(uint8_t address)
-{
-	return 0xFF;
-}
-
-static void rcbus_outb(uint8_t address, uint8_t data)
-{
-}
-
-
-
 int cpu_irq_ack(int level)
 {
 	if (!(irq_pending & (1 << level)))
@@ -148,8 +140,6 @@ int cpu_irq_ack(int level)
 
 static unsigned int do_io_readb(unsigned int address)
 {
-	if (rcbus && address >= 0xFF8000 && address <= 0xFF8FFF)
-		return rcbus_inb(((address - 0xFF8000) >> 1) & 0xFF);
 	/* SPI is not modelled */
 	if (address >= 0xFFD000 && address <= 0xFFDFFF)
 		return 0xFF;
@@ -169,10 +159,6 @@ static void do_io_writeb(unsigned int address, unsigned int value)
 		printf("<%c>", value);
 		return;
 	}
-	if (rcbus && address >= 0xFF8000 && address <= 0xFF8FFF) {
-		rcbus_outb(((address - 0xFF8000) >> 1) & 0xFF, value);
-		return;
-	}
 	/* SPI is not modelled */
 	if (address >= 0xFFD000 && address <= 0xFFDFFF)
 		return;
@@ -190,15 +176,6 @@ static void do_io_writeb(unsigned int address, unsigned int value)
 unsigned int do_cpu_read_byte(unsigned int address)
 {
 	address &= 0xFFFFFF;
-	if (rcbus) {
-		/* Musashi can't emulate this properly it seems */
-		if (address >= 0x800000 && address <= 0xFF8000) {
-			fprintf(stderr, "R: bus error at %d\n", address);
-			return 0xFF;
-		}
-		if (address <= 0xFF8000)
-			address &= 0x1FFFFF;
-	}
 	if (address < sizeof(ram))
 		return ram[address];
 	return do_io_readb(address);
@@ -217,15 +194,6 @@ unsigned int do_cpu_read_word(unsigned int address)
 {
 	address &= 0xFFFFFF;
 
-	if (rcbus) {
-		if (address >= 0x800000 && address < 0xFF8000) {
-			fprintf(stderr, "R: bus error at %d\n", address);
-			return 0xFFFF;
-		}
-		/* RAM wraps four times */
-		if (address <= 0xFF8000)
-			address &= 0x1FFFFF;
-	}
 	if (address < sizeof(ram) - 1)
 		return READ_WORD(ram, address);
 	else if (address >= 0xFFE000 && address <= 0xFFEFFF)
@@ -266,14 +234,6 @@ void cpu_write_byte(unsigned int address, unsigned int value)
 	if (trace & TRACE_MEM)
 		fprintf(stderr, "WB %06X <- %02X\n", address, value);
 
-	if (rcbus) {
-		if (address >= 0x800000 && address <= 0xFF8000) {
-			fprintf(stderr, "W: bus error at %06X\n", address);
-			return;
-		}
-		if (address <= 0xFF8000)
-			address &= 0x1FFFFF;
-	}
 	if (address < sizeof(ram))
 		ram[address] = value;
 	else
@@ -287,14 +247,6 @@ void cpu_write_word(unsigned int address, unsigned int value)
 	if (trace & TRACE_MEM)
 		fprintf(stderr, "WW %06X <- %04X\n", address, value);
 
-	if (rcbus) {
-		if (address >= 0x800000 && address <= 0xFF8000) {
-			fprintf(stderr, "W: bus error at %06X\n", address);
-			return;
-		}
-		if (address <= 0xFF8000)
-			address &= 0x1FFFFF;
-	}
 	if (address < sizeof(ram) - 1) {
 		WRITE_WORD(ram, address, value);
 	} else if (address >= 0xFFE000 && address <= 0xFFEFFF)
@@ -342,82 +294,24 @@ static void device_init(void)
 
 static struct termios saved_term, term;
 
-static void cleanup(int sig)
+void reset_term(void)
 {
 	tcsetattr(0, 0, &saved_term);
+}
+
+static void cleanup(int sig)
+{
+	reset_term();
 	exit(1);
 }
 
 static void exit_cleanup(void)
 {
-	tcsetattr(0, 0, &saved_term);
+	reset_term();
 }
 
-
-static void take_a_nap(void)
+void init_term(void)
 {
-	struct timespec t;
-	t.tv_sec = 0;
-	t.tv_nsec = 100000;
-	if (nanosleep(&t, NULL))
-		perror("nanosleep");
-}
-
-void cpu_pulse_reset(void)
-{
-	device_init();
-}
-
-void cpu_set_fc(int fc)
-{
-}
-
-void usage(void)
-{
-	fprintf(stderr, "tiny68k [-0][-1][-2][-e][-R][-i idepath][-d debug] fuzix.bin.\n");
-	exit(1);
-}
-
-int main(int argc, char *argv[])
-{
-	int fd, cnt;
-	int cputype = M68K_CPU_TYPE_68000;
-	int fast = 0;
-	int opt;
-	uint8_t *ptr;
-	const char *diskname = "tiny68k.ide";
-
-	while((opt = getopt(argc, argv, "012eRfd:i:")) != -1) {
-		switch(opt) {
-		case '0':
-			cputype = M68K_CPU_TYPE_68000;
-			break;
-		case '1':
-			cputype = M68K_CPU_TYPE_68010;
-			break;
-		case '2':
-			cputype = M68K_CPU_TYPE_68020;
-			break;
-		case 'e':
-			cputype = M68K_CPU_TYPE_68EC020;
-			break;
-		case 'R':
-			rcbus = 1;
-			break;
-		case 'f':
-			fast = 1;
-			break;
-		case 'd':
-			trace = atoi(optarg);
-			break;
-		case 'i':
-			diskname = optarg;
-			break;
-		default:
-			usage();
-		}
-	}
-
 	if (tcgetattr(0, &term) == 0) {
 		saved_term = term;
 		atexit(exit_cleanup);
@@ -435,11 +329,124 @@ int main(int argc, char *argv[])
 		tcsetattr(0, 0, &term);
 	}
 
+}
+
+/* The following is used by the monitor */
+
+// Given a filehandle, print the register
+// values to the filehandle
+void print_regs(FILE * fh) {
+  fprintf(fh, "D0-D7: %08X %08X %08X %08X %08X %08X %08X %08X\n",
+          m68ki_cpu.dar[0], m68ki_cpu.dar[1], m68ki_cpu.dar[2],
+          m68ki_cpu.dar[3], m68ki_cpu.dar[4], m68ki_cpu.dar[5],
+          m68ki_cpu.dar[6], m68ki_cpu.dar[7]);
+  fprintf(fh, "A0-A7: %08X %08X %08X %08X %08X %08X %08X %08X\n",
+          m68ki_cpu.dar[8], m68ki_cpu.dar[9], m68ki_cpu.dar[10],
+          m68ki_cpu.dar[11], m68ki_cpu.dar[12], m68ki_cpu.dar[13],
+          m68ki_cpu.dar[14], m68ki_cpu.dar[15]);
+  fprintf(fh, "PC:    %08X  VBR:    %08X                                ",
+          REG_PC, REG_VBR);
+  fprintf(fh, "USP: %08X\n", REG_USP);
+  fprintf(fh, "SFC:        %03X  DFC:         %03X\n",
+          REG_SFC, REG_DFC);
+  fprintf(fh, "Status: mode %c, int %d, %c%c%c%c\n",
+          (FLAG_S) ? 'S' : 'U',
+          FLAG_INT_MASK,
+          (FLAG_N) ? 'N' : ' ',
+          (FLAG_Z) ? 'Z' : ' ', (FLAG_V) ? 'V' : ' ', (FLAG_C) ? 'C' : ' ');
+  fprintf(fh, "\n");
+}
+
+/* End of code used by the monitor */
+
+#if 0
+static void take_a_nap(void)
+{
+	struct timespec t;
+	t.tv_sec = 0;
+	t.tv_nsec = 100000;
+	if (nanosleep(&t, NULL))
+		perror("nanosleep");
+}
+#endif
+
+void cpu_pulse_reset(void)
+{
+	device_init();
+}
+
+void cpu_set_fc(int fc)
+{
+}
+
+void usage(void)
+{
+	fprintf(stderr, "rosco-r2 [-0][-1][-2][-e][-m][-M mapfile][-i idepath][-d debug] fuzix.bin\n");
+	exit(1);
+}
+
+int main(int argc, char *argv[])
+{
+	int fd, cnt;
+	int pc;
+	int i, brkcnt = 0;
+	int duart_cnt=0;
+	int breakpoint;
+	int cputype = M68K_CPU_TYPE_68000;
+	int opt;
+	uint8_t *ptr;
+	const char *diskname = "rosco-r2.ide";
+	int start_in_monitor = 0;
+	char **brkstr;                /* Array of breakpoint strings */
+
+  	// Create an array to hold any breakpoint string pointers
+  	brkstr = (char **) malloc(argc * sizeof(char *));
+  	if (brkstr == NULL) {
+    		perror("brkstr malloc");
+		exit(1);
+	}
+
+	while((opt = getopt(argc, argv, "mb:M:d:i:")) != -1) {
+		switch(opt) {
+   		case 'm':
+      			start_in_monitor = 1;
+      			break;
+    		case 'b':
+      			/* Cache the pointer for now */
+      			brkstr[brkcnt++] = optarg;
+      			break;
+   		case 'M':
+      			read_mapfile(optarg);
+      			break;
+		case 'd':
+			trace = atoi(optarg);
+			break;
+		case 'i':
+			diskname = optarg;
+			break;
+		default:
+			usage();
+		}
+	}
+
+	init_term();
+
         if (optind == argc)
                 usage();
 
         /* Fill RAM with 0xA7 */
         memset(ram, 0xA7, sizeof(ram));
+
+  	/* Initialise the monitor */
+  	monitor_init();
+
+  	/* Now that we might have a map file, */
+  	/* parse any breakpoint strings and set them */
+  	for (i = 0; i < brkcnt; i++) {
+    	    breakpoint = parse_addr(brkstr[i], NULL);
+    	    if (breakpoint != -1)
+            	set_breakpoint(breakpoint, BRK_INST);
+  	}
 
         /* Load fuzix.img at the DEFAULT_ADDRESS */
         fd = open(argv[optind], O_RDONLY);
@@ -481,14 +488,33 @@ int main(int argc, char *argv[])
 	/* Init devices */
 	device_init();
 
+  	/* Start in the monitor if needed */
+  	if (start_in_monitor) {
+    	    pc = monitor(m68ki_cpu.pc);
+    	    /* Change the start address if the monitor says so */
+    	    if (pc != -1)
+      	    m68ki_cpu.pc = pc;
+  	}
+
 	while (1) {
-		/* A 10MHz 68000 should do 1000 cycles per 1/10000th of a
-		   second. We do a blind 0.01 second sleep so we are actually
-		   emulating a bit under 10Mhz - which will do fine for
-		   testing this stuff */
-		m68k_execute(1000);
-		duart_tick(duart);
-		if (!fast)
-			take_a_nap();
+		pc = m68ki_cpu.pc;
+
+    	    	// If the PC is a breakpoint, or we hit a write
+    	    	// breakpoint, fall into the monitor
+    	    	if (write_brkpt == 1 || is_breakpoint(pc, BRK_INST)) {
+      		    write_brkpt = 0;
+      		    pc = monitor(pc);
+
+      		    // If we have a new PC from the monitor, set it
+      		    if (pc != -1)
+        	    	m68ki_cpu.pc = pc;
+    	        }
+		m68k_execute(1);
+		/* Do a tick every 1000 instructions */
+		duart_cnt++;
+		if (duart_cnt == 1000) {
+			duart_tick(duart);
+			duart_cnt=0;
+		}
 	}
 }

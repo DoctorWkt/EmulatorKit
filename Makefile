@@ -139,8 +139,9 @@ tiny68k: tiny68k.o ide.o duart.o m68k/lib68k.a
 tiny68k.o: tiny68k.c m68k/lib68k.a
 	$(CC) $(CFLAGS) -Im68k -c tiny68k.c
 
-rosco-r2: rosco-r2.o ide.o duart.o m68k/lib68k.a
-	cc -g3 rosco-r2.o ide.o duart.o m68k/lib68k.a -o rosco-r2
+rosco-r2: rosco-r2.o ide.o duart.o mapfile.o monitor.o m68k/lib68k.a
+	cc -g3 -o rosco-r2 rosco-r2.o ide.o duart.o mapfile.o monitor.o \
+	  m68k/lib68k.a -lreadline
 
 rosco-r2.o: rosco-r2.c m68k/lib68k.a
 	$(CC) $(CFLAGS) -Im68k -c rosco-r2.c
