@@ -1,4 +1,5 @@
 .gitignore
+rosco-r2
 .gdb_history
 RCS
 emu-ide.img
