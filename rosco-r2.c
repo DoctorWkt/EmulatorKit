@@ -24,9 +24,17 @@
 // https://store.rosco-m68k.com/products/rosco-m68k-classic-v2-full-kit
 
 
-// 1MB RAM at 0x00000000, I/O at 0x00f00000
+// 1MB RAM at 0x00000000
 // 1MB ROM at 0x00e00000
-// DUART from 0x00f00000 to 0x00f0001f
+// I/O     at 0x00f00000:
+// DUART from 0x00f00000 to  0x00f0001f
+// SPI     is 0x00f0001b and 0x00f0001d
+//
+// Base reg:  0x00ffe001 -- not yet
+// CH375 soon:0x00fff001 to  0x00fff003
+//
+// We need to move these:
+// ATA CF:    0x00ffe000 to  0x00ffefff
 
 #define RAM_SIZE        1024 * 1024
 #define RAM_BASE        0x00000000
@@ -35,6 +43,12 @@
 
 #define DUART_START	0x00f00000
 #define DUART_END	0x00f0001f
+
+#define ATA_START	0x00ffe000
+#define ATA_END		0x00ffefff
+
+#define SPI_INBIT       0x00f0001b
+#define SPI_OUTBIT      0x00f0001d
 
 // Executables get loaded at this address by the ROM.
 // The kernel will relocate itself to a lower address.
@@ -61,8 +75,6 @@ static unsigned write_brkpt = 0;
 #define TRACE_CPU	2
 #define TRACE_DUART	4
 #define TRACE_SD	8
-
-uint8_t fc;
 
 // Read/write macros
 #define READ_BYTE(BASE, ADDR) (BASE)[ADDR]
@@ -145,15 +157,13 @@ int cpu_irq_ack(int level) {
 }
 
 
-// TODO v2 board added an RTC
-
 static unsigned int do_io_readb(unsigned int address) {
   // SPI is not modelled
-  if (address >= 0xFFD000 && address <= 0xFFDFFF)
+  if (address >= SPI_INBIT && address <= SPI_OUTBIT)
     return 0xFF;
   // ATA CF
   // FIXME: FFE010-01F sets CS1
-  if (address >= 0xFFE000 && address <= 0xFFEFFF)
+  if (address >= ATA_START && address <= ATA_END)
     return ide_read8(ide, (address & 31) >> 1);
   // DUART
   if (address >= DUART_START && address <= DUART_END)
@@ -167,10 +177,11 @@ static void do_io_writeb(unsigned int address, unsigned int value) {
     return;
   }
   // SPI is not modelled
-  if (address >= 0xFFD000 && address <= 0xFFDFFF)
+  if (address >= SPI_INBIT && address <= SPI_OUTBIT)
+  // if (address >= 0xFFD000 && address <= 0xFFDFFF)
     return;
   // ATA CF
-  if (address >= 0xFFE000 && address <= 0xFFEFFF) {
+  if (address >= ATA_START && address <= ATA_END) {
     ide_write8(ide, (address & 31) >> 1, value);
     return;
   }
@@ -203,7 +214,7 @@ unsigned int do_cpu_read_word(unsigned int address) {
     return READ_WORD(ram, address);
   if (address >= ROM_BASE && address < ROM_BASE + sizeof(rom))
     return READ_WORD(rom, address-ROM_BASE);
-  else if (address >= 0xFFE000 && address <= 0xFFEFFF)
+  else if (address >= ATA_START && address <= ATA_END)
     return ide_read16(ide, (address & 31) >> 1);
   return (do_cpu_read_byte(address) << 8) | do_cpu_read_byte(address + 1);
 }
@@ -255,7 +266,7 @@ void cpu_write_word(unsigned int address, unsigned int value) {
     WRITE_WORD(ram, address, value);
   } else if (address >= ROM_BASE && address < ROM_BASE+ sizeof(rom))
     return;
-  else if (address >= 0xFFE000 && address <= 0xFFEFFF)
+  else if (address >= ATA_START && address <= ATA_END)
     ide_write16(ide, (address & 31) >> 1, value);
   else {
     // Corner cases
