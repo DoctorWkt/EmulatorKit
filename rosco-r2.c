@@ -74,6 +74,8 @@ static unsigned write_brkpt = 0;
 #define TRACE_DUART	4
 #define TRACE_SD	8
 
+#define DUART_IRQ       4
+
 // Read/write macros
 #define READ_BYTE(BASE, ADDR) (BASE)[ADDR]
 #define READ_WORD(BASE, ADDR) (((BASE)[ADDR]<<8) | \
@@ -129,11 +131,11 @@ static unsigned int irq_pending;
 void recalc_interrupts(void) {
   int i;
 
-  // Duart on IPL1
+  // Duart on IPL2
   if (duart_irq_pending(duart))
-    irq_pending |= (1 << 2);
+    irq_pending = (1 << DUART_IRQ);
   else
-    irq_pending &= ~(1 << 2);
+    irq_pending &= ~(1 << DUART_IRQ);
 
   if (irq_pending) {
     for (i = 7; i >= 0; i--) {
@@ -142,15 +144,18 @@ void recalc_interrupts(void) {
 	return;
       }
     }
-  } else
+  } else {
     m68k_set_irq(0);
+  }
 }
 
 int cpu_irq_ack(int level) {
-  if (!(irq_pending & (1 << level)))
+  if (!(irq_pending & (1 << level))) {
     return M68K_INT_ACK_SPURIOUS;
-  if (level == 2)
+  }
+  if (level == DUART_IRQ) {
     return duart_vector(duart);
+  }
   return M68K_INT_ACK_SPURIOUS;
 }
 
