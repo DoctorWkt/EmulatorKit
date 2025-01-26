@@ -29,12 +29,10 @@
 // I/O     at 0x00f00000:
 // DUART from 0x00f00000 to  0x00f0001f
 // SPI     is 0x00f0001b and 0x00f0001d
+// ATA CF:    0x00ffd000 to  0x00ffdfff
 //
 // Base reg:  0x00ffe001 -- not yet
 // CH375 soon:0x00fff001 to  0x00fff003
-//
-// We need to move these:
-// ATA CF:    0x00ffe000 to  0x00ffefff
 
 #define RAM_SIZE        1024 * 1024
 #define RAM_BASE        0x00000000
@@ -44,8 +42,8 @@
 #define DUART_START	0x00f00000
 #define DUART_END	0x00f0001f
 
-#define ATA_START	0x00ffe000
-#define ATA_END		0x00ffefff
+#define ATA_START	0x00ffd000
+#define ATA_END		0x00ffdfff
 
 #define SPI_INBIT       0x00f0001b
 #define SPI_OUTBIT      0x00f0001d
