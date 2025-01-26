@@ -13,11 +13,13 @@
 #include <m68k.h>
 #include <m68kcpu.h>
 #include <arpa/inet.h>
+#include <err.h>
 #include "ide.h"
-#include "sdcard.h"
+#include "bel_sdcard.h"
 #include "duart.h"
 #include "mapfile.h"
 #include "monitor.h"
+#include "loglevel.h"
 
 
 // Emulator for the Rosco r2 m68k SBC:
@@ -47,6 +49,10 @@
 
 #define SPI_INBIT       0x00f0001b
 #define SPI_OUTBIT      0x00f0001d
+#define SPI_ASSERTCS0   0x04
+#define SPI_OUTMASK     0x40    // This bit inverse of output bit
+#define SPI_OUTPUT      0x10    // If set, is a bit send
+#define SPI_INMASK      0x04    // Bit to set if receiving a 1 bit
 
 // Executables get loaded at this address by the ROM.
 // The kernel will relocate itself to a lower address.
@@ -59,22 +65,19 @@ static uint8_t rom[ROM_SIZE];
 static struct ide_controller *ide;
 
 // SD card
-struct sdcard *sd;
+FILE *sdfh=NULL;	// The SD card file handle
 
 // 68681
 static struct duart *duart;
+#define DUART_IRQ  4
 
-static int trace = 0;
+// Logging
+FILE *logfh = NULL;
+int loglevel = 0;
 
 // If 1, we hit a write breakpoint
 static unsigned write_brkpt = 0;
 
-#define TRACE_MEM	1
-#define TRACE_CPU	2
-#define TRACE_DUART	4
-#define TRACE_SD	8
-
-#define DUART_IRQ       4
 
 // Read/write macros
 #define READ_BYTE(BASE, ADDR) (BASE)[ADDR]
@@ -93,6 +96,13 @@ static unsigned write_brkpt = 0;
 			(BASE)[(ADDR)+2] = ((VAL)>>8)&0xff; \
 			(BASE)[(ADDR)+3] = (VAL)&0xff
 
+// Close the log file if it is open
+void close_logfile() {
+  if (logfh != NULL) {
+    fflush(logfh);
+    fclose(logfh);
+  }
+}
 
 unsigned int check_chario(void) {
   fd_set i, o;
@@ -159,18 +169,58 @@ int cpu_irq_ack(int level) {
   return M68K_INT_ACK_SPURIOUS;
 }
 
+static uint8_t spi_outvalue = 0;        // Data sent by CPU via SPI
+static uint8_t spi_outcount = 0;        // Count of bits received
+static uint8_t spi_invalue = 0;		// Data to be received via SPI
+static uint8_t spi_incount = 0;		// Count of bits received
+static uint8_t spi_isdata = 0;		// Is there data to receive?
 
 static unsigned int do_io_readb(unsigned int address) {
-  // SPI is not modelled
-  if (address >= SPI_INBIT && address <= SPI_OUTBIT)
-    return 0xFF;
+  unsigned int value=0;
+  uint8_t *dataptr;
+
+  // SPI SD card
+  if (address == SPI_INBIT) {
+    // If there is no data to receive
+    if (spi_isdata == 0) {
+      // See if there is any in the SD card buffer
+      dataptr = spi_get_data();
+      if (dataptr == NULL)
+        return (0);
+
+      // Get the byte of data to send.
+      // We start at bit position 0.
+      spi_invalue = *dataptr;
+      spi_incount = 0;
+      spi_isdata = 1;
+    }
+
+    // Most significant bit on?
+    if (spi_invalue & 0x80)
+      value = SPI_INMASK;
+    else
+      value = 0;
+
+    // Shift to lose that bit, bump the count
+    // and reset if we have sent all eight bits
+    spi_invalue = spi_invalue << 1;
+    spi_incount++;
+
+    if (spi_incount == 8) {
+      spi_incount = 0;
+      spi_isdata = 0;
+    }
+    return (value);
+  }
+
   // ATA CF
-  // FIXME: FFE010-01F sets CS1
   if (address >= ATA_START && address <= ATA_END)
     return ide_read8(ide, (address & 31) >> 1);
+
   // DUART
   if (address >= DUART_START && address <= DUART_END)
     return duart_read(duart, address >> 1);
+
   return 0x00;
 }
 
@@ -179,15 +229,47 @@ static void do_io_writeb(unsigned int address, unsigned int value) {
     printf("<%c>", value);
     return;
   }
-  // SPI is not modelled
-  if (address >= SPI_INBIT && address <= SPI_OUTBIT)
-  // if (address >= 0xFFD000 && address <= 0xFFDFFF)
+
+  // SPI SD card
+  if (address == SPI_OUTBIT) {
+    // If CS) has been asserted
+    if (value & SPI_ASSERTCS0) {
+      // Send back an 0xFF data byte
+      spi_invalue = 0xff;
+      spi_incount = 0;
+      spi_isdata = 1;
+      return;
+    }
+
+    // If there is an SPI output bit
+    if (value & SPI_OUTPUT) {
+      // Convert to 0 or 1, then
+      // shift it into spi_outvalue
+      value = 1 - ((value & SPI_OUTMASK) >> 6);
+      spi_outvalue = (spi_outvalue << 1) | value;
+      spi_outcount++;
+
+      if (spi_outcount == 8) {
+        // Send the received byte to the
+        // SD card command handler
+        if (logfh != NULL && (loglevel & LOG_IOACCESS) == LOG_IOACCESS) {
+          if (spi_outvalue != 0xff)
+            fprintf(logfh, "Latched SPI byte 0x%x\n", spi_outvalue);
+        }
+        spi_latch_in(spi_outvalue);
+        spi_outcount = 0;
+        spi_outvalue = 0;
+      }
+    }
     return;
+  }
+
   // ATA CF
   if (address >= ATA_START && address <= ATA_END) {
     ide_write8(ide, (address & 31) >> 1, value);
     return;
   }
+
   // DUART
   if (address >= DUART_START && address <= DUART_END)
     duart_write(duart, address >> 1, value);
@@ -205,8 +287,8 @@ unsigned int do_cpu_read_byte(unsigned int address) {
 
 unsigned int cpu_read_byte(unsigned int address) {
   unsigned int v = do_cpu_read_byte(address);
-  if (trace & TRACE_MEM)
-    fprintf(stderr, "RB %06X -> %02X\n", address, v);
+  if (logfh!= NULL && (loglevel & LOG_MEMACCESS))
+    fprintf(logfh, "RB %06X -> %02X\n", address, v);
   return v;
 }
 
@@ -224,8 +306,8 @@ unsigned int do_cpu_read_word(unsigned int address) {
 
 unsigned int cpu_read_word(unsigned int address) {
   unsigned int v = do_cpu_read_word(address);
-  if (trace & TRACE_MEM)
-    fprintf(stderr, "RW %06X -> %04X\n", address, v);
+  if (logfh!= NULL && (loglevel & LOG_MEMACCESS))
+    fprintf(logfh, "RW %06X -> %04X\n", address, v);
   return v;
 }
 
@@ -248,8 +330,8 @@ unsigned int cpu_read_long_dasm(unsigned int address) {
 void cpu_write_byte(unsigned int address, unsigned int value) {
   address &= 0xFFFFFF;
 
-  if (trace & TRACE_MEM)
-    fprintf(stderr, "WB %06X <- %02X\n", address, value);
+  if (logfh!= NULL && (loglevel & LOG_MEMACCESS))
+    fprintf(logfh, "WB %06X <- %02X\n", address, value);
 
   if (address < sizeof(ram))
     ram[address] = value;
@@ -262,8 +344,8 @@ void cpu_write_byte(unsigned int address, unsigned int value) {
 void cpu_write_word(unsigned int address, unsigned int value) {
   address &= 0xFFFFFF;
 
-  if (trace & TRACE_MEM)
-    fprintf(stderr, "WW %06X <- %04X\n", address, value);
+  if (logfh!= NULL && (loglevel & LOG_MEMACCESS))
+    fprintf(logfh, "WW %06X <- %04X\n", address, value);
 
   if (address < sizeof(ram) - 1) {
     WRITE_WORD(ram, address, value);
@@ -293,7 +375,7 @@ void cpu_write_pd(unsigned int address, unsigned int value) {
 }
 
 void cpu_instr_callback(void) {
-  if (trace & TRACE_CPU) {
+  if (logfh != NULL && (loglevel & LOG_INSTDECODE)) {
     char buf[128];
     unsigned int pc = m68k_get_reg(NULL, M68K_REG_PC);
     m68k_disassemble(buf, pc, M68K_CPU_TYPE_68000);
@@ -390,7 +472,7 @@ void cpu_set_fc(int fc) {
 void usage(char *name) {
   fprintf(stderr, "\nUsage: %s [flags] executable_file\n\n", name);
   fprintf(stderr, "Flags are:\n");
-  // fprintf(stderr, "  -L logfile            Log debug info to this file\n");
+  fprintf(stderr, "  -L logfile            Log debug info to this file\n");
   fprintf(stderr, "  -M mapfile            Load symbols from a map file\n");
   fprintf(stderr, "  -R romfile            Use the file as the ROM image\n");
   fprintf(stderr, "  -s sdcardfile         Attach SD card image file\n");
@@ -398,7 +480,7 @@ void usage(char *name) {
   fprintf(stderr,
      "  -b addr [-b addr2]    Set breakpoint(s) at symbol or dec/$hex addr\n");
   fprintf(stderr,
-     "  -d value              Set dec bitmap of debug flags\n");
+     "  -l value              Set dec bitmap of debug flags\n");
   fprintf(stderr, "  -m                    Start in the monitor\n");
   fprintf(stderr, "\nIf -R used, executable_file is not used.\n\n");
   exit(1);
@@ -426,7 +508,7 @@ int main(int argc, char *argv[]) {
     exit(1);
   }
 
-  while ((opt = getopt(argc, argv, "mb:M:R:d:i:s:")) != -1) {
+  while ((opt = getopt(argc, argv, "mb:L:M:R:d:i:s:")) != -1) {
     switch (opt) {
     case 'm':
       start_in_monitor = 1;
@@ -435,6 +517,15 @@ int main(int argc, char *argv[]) {
       // Cache the pointer for now
       brkstr[brkcnt++] = optarg;
       break;
+    case 'L':
+      logfh = fopen(optarg, "w+");
+      if (logfh == NULL)
+        errx(EXIT_FAILURE, "Unable to open %s\n", optarg);
+      // Set a default log level if not already set
+      if (loglevel == 0)
+        loglevel = LOG_INSTDECODE;
+      atexit(close_logfile);
+      break;
     case 'M':
       read_mapfile(optarg);
       break;
@@ -442,7 +533,7 @@ int main(int argc, char *argv[]) {
       romfile = optarg;
       break;
     case 'd':
-      trace = atoi(optarg);
+      loglevel = atoi(optarg);
       break;
     case 'i':
       idename = optarg;
@@ -527,22 +618,18 @@ int main(int argc, char *argv[]) {
       exit(1);
   }
 
-  // Open and attach any SD device
+  // Open any SD device
   if (sdname) {
-    fd = open(sdname, O_RDWR);
-    if (fd == -1) {
+    sdfh = fopen(sdname, "r+");
+    if (sdfh == NULL) {
       perror(sdname);
       exit(1);
     }
-    sd = sd_create("sd0");
-    sd_reset(sd);
-    sd_attach(sd, fd);
-    sd_trace(sd, trace & TRACE_SD);
+    // Initialise the SD card variables
+    sdcard_init();
   }
 
   duart = duart_create();
-  if (trace & TRACE_DUART)
-    duart_trace(duart, 1);
 
   m68k_init();
   m68k_set_cpu_type(cputype);
