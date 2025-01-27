@@ -226,7 +226,7 @@ uint8_t *spi_get_data(void) {
 void spi_latch_in(uint8_t m_in_latch) {
 
   // Bubble the existing command data down
-  // and put the byte that the end
+  // and put the byte at the end
   for (int i = 0; i < 5; i++)
     m_cmd[i] = m_cmd[i + 1];
 
@@ -300,7 +300,7 @@ void spi_latch_in(uint8_t m_in_latch) {
 static void do_command() {
   if (((m_cmd[0] & 0xc0) == 0x40) && (m_cmd[5] & 1)) {
     if (logfh != NULL && (loglevel & LOG_SDCARD) == LOG_SDCARD) {
-      fprintf(logfh, "SDCARD: cmd %02d %02x %02x %02x %02x %02x\n",
+      fprintf(logfh, "SDCARD: cmd %02d 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x\n",
 	      m_cmd[0] & 0x3f, m_cmd[1], m_cmd[2],
 	      m_cmd[3], m_cmd[4], m_cmd[5]);
     }

@@ -185,8 +185,12 @@ static unsigned int do_io_readb(unsigned int address) {
     if (spi_isdata == 0) {
       // See if there is any in the SD card buffer
       dataptr = spi_get_data();
-      if (dataptr == NULL)
-        return (0);
+      if (dataptr == NULL) {
+        if (logfh != NULL && (loglevel & LOG_SDCARD)) {
+	  fprintf(logfh, "spi_isdata 0 and dataptr NULL, SPI read returning 0x40\n");
+	}
+        return (0x40);		// A high bit
+      }
 
       // Get the byte of data to send.
       // We start at bit position 0.
@@ -210,11 +214,14 @@ static unsigned int do_io_readb(unsigned int address) {
       spi_incount = 0;
       spi_isdata = 0;
     }
+    if (logfh != NULL && (loglevel & LOG_SDCARD)) {
+	fprintf(logfh, "SPI read returning 0x%x\n", value);
+    }
     return (value);
   }
 
   // ATA CF
-  if (address >= ATA_START && address <= ATA_END)
+  if (address >= ATA_START && address <= ATA_END && ide!=NULL)
     return ide_read8(ide, (address & 31) >> 1);
 
   // DUART
@@ -225,19 +232,18 @@ static unsigned int do_io_readb(unsigned int address) {
 }
 
 static void do_io_writeb(unsigned int address, unsigned int value) {
-  if (address == 0xFFFFFF) {
-    printf("<%c>", value);
-    return;
-  }
 
   // SPI SD card
   if (address == SPI_OUTBIT) {
-    // If CS) has been asserted
+    // If CS has been asserted
     if (value & SPI_ASSERTCS0) {
       // Send back an 0xFF data byte
       spi_invalue = 0xff;
       spi_incount = 0;
       spi_isdata = 1;
+      if (logfh != NULL && (loglevel & LOG_SDCARD)) {
+	fprintf(logfh, "SPI asserted, returning 0xFF\n");
+      }
       return;
     }
 
@@ -252,7 +258,7 @@ static void do_io_writeb(unsigned int address, unsigned int value) {
       if (spi_outcount == 8) {
         // Send the received byte to the
         // SD card command handler
-        if (logfh != NULL && (loglevel & LOG_IOACCESS) == LOG_IOACCESS) {
+        if (logfh != NULL && (loglevel & LOG_SDCARD)) {
           if (spi_outvalue != 0xff)
             fprintf(logfh, "Latched SPI byte 0x%x\n", spi_outvalue);
         }
@@ -265,7 +271,7 @@ static void do_io_writeb(unsigned int address, unsigned int value) {
   }
 
   // ATA CF
-  if (address >= ATA_START && address <= ATA_END) {
+  if (address >= ATA_START && address <= ATA_END && ide!=NULL) {
     ide_write8(ide, (address & 31) >> 1, value);
     return;
   }
@@ -299,7 +305,7 @@ unsigned int do_cpu_read_word(unsigned int address) {
     return READ_WORD(ram, address);
   if (address >= ROM_BASE && address < ROM_BASE + sizeof(rom))
     return READ_WORD(rom, address-ROM_BASE);
-  else if (address >= ATA_START && address <= ATA_END)
+  else if (address >= ATA_START && address <= ATA_END && ide != NULL)
     return ide_read16(ide, (address & 31) >> 1);
   return (do_cpu_read_byte(address) << 8) | do_cpu_read_byte(address + 1);
 }
@@ -351,7 +357,7 @@ void cpu_write_word(unsigned int address, unsigned int value) {
     WRITE_WORD(ram, address, value);
   } else if (address >= ROM_BASE && address < ROM_BASE+ sizeof(rom))
     return;
-  else if (address >= ATA_START && address <= ATA_END)
+  else if (address >= ATA_START && address <= ATA_END && ide!=NULL)
     ide_write16(ide, (address & 31) >> 1, value);
   else {
     // Corner cases
