@@ -187,9 +187,9 @@ static unsigned int do_io_readb(unsigned int address) {
       dataptr = spi_get_data();
       if (dataptr == NULL) {
         if (logfh != NULL && (loglevel & LOG_SDCARD)) {
-	  fprintf(logfh, "spi_isdata 0 and dataptr NULL, SPI read returning 0x40\n");
+	  fprintf(logfh, "spi_isdata 0, dataptr NULL, SPI read returning 0\n");
 	}
-        return (0x40);		// A high bit
+        return (0x00);
       }
 
       // Get the byte of data to send.
@@ -241,9 +241,11 @@ static void do_io_writeb(unsigned int address, unsigned int value) {
       spi_invalue = 0xff;
       spi_incount = 0;
       spi_isdata = 1;
+#if 0
       if (logfh != NULL && (loglevel & LOG_SDCARD)) {
 	fprintf(logfh, "SPI asserted, returning 0xFF\n");
       }
+#endif
       return;
     }
 

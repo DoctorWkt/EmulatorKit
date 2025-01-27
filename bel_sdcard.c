@@ -307,87 +307,99 @@ static void do_command() {
 
     bool clean_cmd = true;
 
+    // WKT: Looks like FUZIX wants FF before each command response
+
     switch (m_cmd[0] & 0x3f) {
     case 0:			// CMD0 - GO_IDLE_STATE
       if (sdfh != NULL) {
-	m_data[0] = 0x01;
-	send_data(1, SD_STATE_IDLE);
+	m_data[0] = 0xFF;
+	m_data[1] = 0x01;
+	send_data(2, SD_STATE_IDLE);
       } else {
-	m_data[0] = 0x00;
-	send_data(1, SD_STATE_INA);
+	m_data[0] = 0xFF;
+	m_data[1] = 0x00;
+	send_data(2, SD_STATE_INA);
       }
       break;
 
     case 1:			// CMD1 - SEND_OP_COND
-      m_data[0] = 0x00;
-      send_data(1, SD_STATE_READY);
+      m_data[0] = 0xFF;
+      m_data[1] = 0x00;
+      send_data(2, SD_STATE_READY);
       break;
 
     case 8:			// CMD8 - SEND_IF_COND (SD v2 only)
-      m_data[0] = 0x01;
-      m_data[1] = 0;
+      m_data[0] = 0xFF;
+      m_data[1] = 0x01;
       m_data[2] = 0;
-      m_data[3] = 0x01;
-      m_data[4] = 0xaa;
-      send_data(5, SD_STATE_IDLE);
+      m_data[3] = 0;
+      m_data[4] = 0x01;
+      m_data[5] = 0xaa;
+      send_data(6, SD_STATE_IDLE);
       break;
 
     case 9:			// CMD9 - SEND_CSD
-      m_data[0] = 0x00;		// TODO
-      send_data(1, SD_STATE_STBY);
+      m_data[0] = 0xFF;
+      m_data[1] = 0x00;		// TODO
+      send_data(2, SD_STATE_STBY);
       break;
 
     case 10:			// CMD10 - SEND_CID
-      m_data[0] = 0x00;		// initial R1 response
-      m_data[1] = 0xff;		// throwaway byte before data transfer
-      m_data[2] = 0xfe;		// data token
-      m_data[3] = 'M';		// Manufacturer ID - we'll use M for MAME
-      m_data[4] = 'M';		// OEM ID - MD for MAMEdev
-      m_data[5] = 'D';
-      m_data[6] = 'M';		// Product Name - "MCARD"
-      m_data[7] = 'C';
-      m_data[8] = 'A';
-      m_data[9] = 'R';
-      m_data[10] = 'D';
-      m_data[11] = 0x10;	// Product Revision in BCD (1.0)
+      m_data[0] = 0xFF;
+      m_data[1] = 0x00;		// initial R1 response
+      m_data[2] = 0xff;		// throwaway byte before data transfer
+      m_data[3] = 0xfe;		// data token
+      m_data[4] = 'M';		// Manufacturer ID - we'll use M for MAME
+      m_data[5] = 'M';		// OEM ID - MD for MAMEdev
+      m_data[6] = 'D';
+      m_data[7] = 'M';		// Product Name - "MCARD"
+      m_data[8] = 'C';
+      m_data[9] = 'A';
+      m_data[10] = 'R';
+      m_data[11] = 'D';
+      m_data[12] = 0x10;	// Product Revision in BCD (1.0)
       {
 	uint32_t uSerial = 0x12345678;
-	put_u32be(&m_data[12], uSerial);	// PSN - Product Serial Number
+	put_u32be(&m_data[13], uSerial);	// PSN - Product Serial Number
       }
-      m_data[16] = 0x01;	// MDT - Manufacturing Date
-      m_data[17] = 0x59;	// 0x15 9 = 2021, September
-      m_data[18] = 0x00;	// CRC7, bit 0 is always 0
+      m_data[17] = 0x01;	// MDT - Manufacturing Date
+      m_data[18] = 0x59;	// 0x15 9 = 2021, September
+      m_data[19] = 0x00;	// CRC7, bit 0 is always 0
       {
 	uint16_t crc16 = 0;
-	put_u16be(&m_data[19], crc16);
+	put_u16be(&m_data[20], crc16);
       }
-      send_data(3 + 16 + 2, SD_STATE_STBY);
+      send_data(4 + 16 + 2, SD_STATE_STBY);
       break;
 
     case 12:			// CMD12 - STOP_TRANSMISSION
-      m_data[0] = 0;
-      send_data(1, m_state == SD_STATE_RCV ? SD_STATE_PRG : SD_STATE_TRAN);
+      m_data[0] = 0xFF;
+      m_data[1] = 0;
+      send_data(2, m_state == SD_STATE_RCV ? SD_STATE_PRG : SD_STATE_TRAN);
       break;
 
     case 13:			// CMD13 - SEND_STATUS
-      m_data[0] = 0;		// TODO
-      send_data(1, SD_STATE_STBY);
+      m_data[0] = 0xFF;
+      m_data[1] = 0;		// TODO
+      send_data(2, SD_STATE_STBY);
       break;
 
     case 16:			// CMD16 - SET_BLOCKLEN
       m_blksize = get_u16be(&m_cmd[3]);
-      m_data[0] = 0;
-      send_data(1, SD_STATE_TRAN);
+      m_data[0] = 0xFF;
+      m_data[1] = 0;
+      send_data(2, SD_STATE_TRAN);
       break;
 
     case 17:			// CMD17 - READ_SINGLE_BLOCK
       if (sdfh != NULL) {
-	m_data[0] = 0x00;	// initial R1 response
+        m_data[0] = 0xFF;
+	m_data[1] = 0x00;	// initial R1 response
 	// data token occurs some time after the R1 response.
 	// A2SD expects at least 1 byte of space between R1
 	// and the data packet.
-	m_data[1] = 0xff;
-	m_data[2] = 0xfe;	// data token
+	m_data[2] = 0xff;
+	m_data[3] = 0xfe;	// data token
 	uint32_t blk = get_u32be(&m_cmd[1]);
 	if (m_type == SD_TYPE_V2) {
 	  blk /= m_blksize;
@@ -395,15 +407,15 @@ static void do_command() {
 	if (logfh != NULL && (loglevel & LOG_SDCARD) == LOG_SDCARD) {
 	  fprintf(logfh, "reading LBA %d (0x%x)\n", blk, blk);
 	}
-	imageread(blk, &m_data[3]);
+	imageread(blk, &m_data[4]);
 	{
 	  uint16_t crc16 = 0;
-	  put_u16be(&m_data[m_blksize + 3], crc16);
+	  put_u16be(&m_data[m_blksize + 4], crc16);
 	}
-	// send_data(3 + m_blksize + 2, SD_STATE_DATA); // WKT
-	send_data(3 + m_blksize + 2, SD_STATE_IDLE);
+	// send_data(4 + m_blksize + 2, SD_STATE_DATA); // WKT
+	send_data(4 + m_blksize + 2, SD_STATE_IDLE);
       } else {
-	m_data[0] = 0xff;	// show an error
+	m_data[0] = 0xFF;	// show an error
 	// send_data(1, SD_STATE_DATA); // WKT
 	send_data(1, SD_STATE_IDLE);
       }
@@ -411,7 +423,8 @@ static void do_command() {
 
     case 18:			// CMD18 - CMD_READ_MULTIPLE_BLOCK
       if (sdfh != NULL) {
-	m_data[0] = 0x00;	// initial R1 response
+	m_data[0] = 0xFF;
+	m_data[1] = 0x00;	// initial R1 response
 	// data token occurs some time after the R1 response.  A2SD
 	// expects at least 1 byte of space between R1 and the data
 	// packet.
@@ -422,56 +435,61 @@ static void do_command() {
       } else {
 	m_data[0] = 0xff;	// show an error
       }
-      send_data(1, SD_STATE_DATA_MULTI);
+      send_data(2, SD_STATE_DATA_MULTI);
       break;
 
     case 24:			// CMD24 - WRITE_BLOCK
-      m_data[0] = 0;
+      m_data[0] = 0xFF;
+      m_data[1] = 0;
       m_blknext = get_u32be(&m_cmd[1]);
       if (m_type == SD_TYPE_V2) {
 	m_blknext /= m_blksize;
       }
-      send_data(1, SD_STATE_WRITE_WAITFE);
+      send_data(2, SD_STATE_WRITE_WAITFE);
       break;
 
     case 41:
       if (m_bACMD)		// ACMD41 - SD_SEND_OP_COND
       {
-	m_data[0] = 0;
-	// send_data(1, SD_STATE_READY);        // + SD_STATE_IDLE WKT
-	send_data(1, SD_STATE_IDLE);
+	m_data[0] = 0xFF;
+	m_data[1] = 0;
+	// send_data(2, SD_STATE_READY);        // + SD_STATE_IDLE WKT
+	send_data(2, SD_STATE_IDLE);
       } else			// CMD41 - illegal
       {
-	m_data[0] = 0xff;
+	m_data[0] = 0xFF;
 	send_data(1, SD_STATE_INA);
       }
       break;
 
     case 55:			// CMD55 - APP_CMD
-      m_data[0] = 0x01;
-      send_data(1, SD_STATE_IDLE);
+      m_data[0] = 0xFF;
+      m_data[1] = 0x01;
+      send_data(2, SD_STATE_IDLE);
       break;
 
     case 58:			// CMD58 - READ_OCR
-      m_data[0] = 0;
+      m_data[0] = 0xFF;
+      m_data[1] = 0;
       if (m_type == SD_TYPE_HC) {
-	// m_data[1] = 0x40;    // indicate SDHC support WKT original
-	m_data[1] = 0xC0;	// indicate SDHC support WKT new
+	// m_data[2] = 0x40;    // indicate SDHC support WKT original
+	m_data[2] = 0xC0;	// indicate SDHC support WKT new
       } else {
-	m_data[1] = 0x80;
+	m_data[2] = 0x80;
       }
-      m_data[2] = 0;
       m_data[3] = 0;
       m_data[4] = 0;
-      // send_data(5, SD_STATE_DATA); // WKT - was this before
-      send_data(5, SD_STATE_IDLE);
+      m_data[5] = 0;
+      // send_data(6, SD_STATE_DATA); // WKT - was this before
+      send_data(6, SD_STATE_IDLE);
       break;
 
     case 59:			// CMD59 - CRC_ON_OFF
-      m_data[0] = 0;
+      m_data[0] = 0xFF;
+      m_data[1] = 0;
       // TODO CRC 1-on, 0-off
-      // send_data(1, SD_STATE_STBY); // WKT - was this before
-      send_data(1, SD_STATE_IDLE);
+      // send_data(2, SD_STATE_STBY); // WKT - was this before
+      send_data(2, SD_STATE_IDLE);
       break;
 
     default:
