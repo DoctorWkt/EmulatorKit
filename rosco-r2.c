@@ -475,8 +475,8 @@ void usage(char *name) {
   fprintf(stderr, "  -L logfile            Log debug info to this file\n");
   fprintf(stderr, "  -M mapfile            Load symbols from a map file\n");
   fprintf(stderr, "  -R romfile            Use the file as the ROM image\n");
-  fprintf(stderr, "  -s sdcardfile         Attach SD card image file\n");
-  fprintf(stderr, "  -i USB_image          Attach USB image file\n");
+  fprintf(stderr, "  -s sdfile             Attach SD image file\n");
+  fprintf(stderr, "  -i idefile            Attach IDE image file\n");
   fprintf(stderr,
      "  -b addr [-b addr2]    Set breakpoint(s) at symbol or dec/$hex addr\n");
   fprintf(stderr,
