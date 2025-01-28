@@ -186,7 +186,7 @@ static unsigned int do_io_readb(unsigned int address) {
       // See if there is any in the SD card buffer
       dataptr = spi_get_data();
       if (dataptr == NULL) {
-        if (logfh != NULL && (loglevel & LOG_SDCARD)) {
+        if (logfh != NULL && (loglevel & LOG_MISC)) {
 	  fprintf(logfh, "spi_isdata 0, dataptr NULL, SPI read returning 0\n");
 	}
         return (0x00);
@@ -214,7 +214,7 @@ static unsigned int do_io_readb(unsigned int address) {
       spi_incount = 0;
       spi_isdata = 0;
     }
-    if (logfh != NULL && (loglevel & LOG_SDCARD)) {
+    if (logfh != NULL && (loglevel & LOG_MISC)) {
 	fprintf(logfh, "SPI read returning 0x%x\n", value);
     }
     return (value);
@@ -241,8 +241,8 @@ static void do_io_writeb(unsigned int address, unsigned int value) {
       spi_invalue = 0xff;
       spi_incount = 0;
       spi_isdata = 1;
-#if 0
-      if (logfh != NULL && (loglevel & LOG_SDCARD)) {
+#if 1
+      if (logfh != NULL && (loglevel & LOG_MISC)) {
 	fprintf(logfh, "SPI asserted, returning 0xFF\n");
       }
 #endif
@@ -260,7 +260,7 @@ static void do_io_writeb(unsigned int address, unsigned int value) {
       if (spi_outcount == 8) {
         // Send the received byte to the
         // SD card command handler
-        if (logfh != NULL && (loglevel & LOG_SDCARD)) {
+        if (logfh != NULL && (loglevel & LOG_MISC)) {
           if (spi_outvalue != 0xff)
             fprintf(logfh, "Latched SPI byte 0x%x\n", spi_outvalue);
         }

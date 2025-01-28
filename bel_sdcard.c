@@ -172,7 +172,7 @@ void sdcard_init() {
   m_in_bit = 0;
   m_clk_state = 0;
   m_in_latch = 0;
-  m_out_latch = 0xff;
+  m_out_latch = 0xFF;
   m_cur_bit = 0;
   m_out_count = 0;
   m_out_ptr = 0;
@@ -188,7 +188,8 @@ void sdcard_init() {
 static void send_data(uint16_t count, int new_state) {
 
   if (logfh != NULL && (loglevel & LOG_SDCARD) == LOG_SDCARD) {
-    fprintf(logfh, "SDCARD response: %d bytes:\n  ", count);
+    fprintf(logfh, "SDCARD response: %d bytes: ", count);
+    if (count > 15) fprintf(logfh, "\n  ");
     for (int i = 0; i < count; i++) {
       fprintf(logfh, "%02x ", m_data[i]);
       if ((i % 16) == 15)
@@ -238,9 +239,9 @@ void spi_latch_in(uint8_t m_in_latch) {
     break;
 
   case SD_STATE_WRITE_WAITFE:
-    if (m_in_latch == 0xfe) {
+    if (m_in_latch == 0xFE) {
       m_state = SD_STATE_WRITE_DATA;
-      m_out_latch = 0xff;
+      m_out_latch = 0xFF;
       m_write_ptr = 0;
     }
     break;
@@ -258,8 +259,6 @@ void spi_latch_in(uint8_t m_in_latch) {
       } else {
 	m_data[0] = DATA_RESPONSE_IO_ERROR;
       }
-      // m_data[1] = 0x01;              // WKT original
-      // send_data(2, SD_STATE_IDLE);   // WKT original
 
       // WKT: looking at the rosco code in bbsd.c, it does:
       // - send dummy FF byte
@@ -273,14 +272,14 @@ void spi_latch_in(uint8_t m_in_latch) {
 
       // WKT: also clear the command buffer
       for (int i = 0; i < 6; i++)
-	m_cmd[i] = 0xff;
+	m_cmd[i] = 0xFF;
     }
     break;
 
   case SD_STATE_DATA_MULTI:
     do_command();
     if (m_state == SD_STATE_DATA_MULTI && m_out_count == 0) {
-      m_data[0] = 0xfe;		// data token
+      m_data[0] = 0xFE;		// data token
       imageread(m_blknext++, &m_data[1]);
       uint16_t crc16 = 0;
       put_u16be(&m_data[m_blksize + 1], crc16);
@@ -308,7 +307,6 @@ static void do_command() {
     bool clean_cmd = true;
 
     // WKT: Looks like FUZIX wants FF before each command response
-
     switch (m_cmd[0] & 0x3f) {
     case 0:			// CMD0 - GO_IDLE_STATE
       if (sdfh != NULL) {
@@ -347,8 +345,8 @@ static void do_command() {
     case 10:			// CMD10 - SEND_CID
       m_data[0] = 0xFF;
       m_data[1] = 0x00;		// initial R1 response
-      m_data[2] = 0xff;		// throwaway byte before data transfer
-      m_data[3] = 0xfe;		// data token
+      m_data[2] = 0xFF;		// throwaway byte before data transfer
+      m_data[3] = 0xFE;		// data token
       m_data[4] = 'M';		// Manufacturer ID - we'll use M for MAME
       m_data[5] = 'M';		// OEM ID - MD for MAMEdev
       m_data[6] = 'D';
@@ -398,8 +396,8 @@ static void do_command() {
 	// data token occurs some time after the R1 response.
 	// A2SD expects at least 1 byte of space between R1
 	// and the data packet.
-	m_data[2] = 0xff;
-	m_data[3] = 0xfe;	// data token
+	m_data[2] = 0xFF;
+	m_data[3] = 0xFE;	// data token
 	uint32_t blk = get_u32be(&m_cmd[1]);
 	if (m_type == SD_TYPE_V2) {
 	  blk /= m_blksize;
@@ -412,11 +410,9 @@ static void do_command() {
 	  uint16_t crc16 = 0;
 	  put_u16be(&m_data[m_blksize + 4], crc16);
 	}
-	// send_data(4 + m_blksize + 2, SD_STATE_DATA); // WKT
 	send_data(4 + m_blksize + 2, SD_STATE_IDLE);
       } else {
 	m_data[0] = 0xFF;	// show an error
-	// send_data(1, SD_STATE_DATA); // WKT
 	send_data(1, SD_STATE_IDLE);
       }
       break;
@@ -433,7 +429,7 @@ static void do_command() {
 	  m_blknext /= m_blksize;
 	}
       } else {
-	m_data[0] = 0xff;	// show an error
+	m_data[0] = 0xFF;	// show an error
       }
       send_data(2, SD_STATE_DATA_MULTI);
       break;
@@ -453,7 +449,6 @@ static void do_command() {
       {
 	m_data[0] = 0xFF;
 	m_data[1] = 0;
-	// send_data(2, SD_STATE_READY);        // + SD_STATE_IDLE WKT
 	send_data(2, SD_STATE_IDLE);
       } else			// CMD41 - illegal
       {
@@ -472,15 +467,13 @@ static void do_command() {
       m_data[0] = 0xFF;
       m_data[1] = 0;
       if (m_type == SD_TYPE_HC) {
-	// m_data[2] = 0x40;    // indicate SDHC support WKT original
-	m_data[2] = 0xC0;	// indicate SDHC support WKT new
+	m_data[2] = 0xC0;	// indicate SDHC support
       } else {
 	m_data[2] = 0x80;
       }
       m_data[3] = 0;
       m_data[4] = 0;
       m_data[5] = 0;
-      // send_data(6, SD_STATE_DATA); // WKT - was this before
       send_data(6, SD_STATE_IDLE);
       break;
 
@@ -488,7 +481,6 @@ static void do_command() {
       m_data[0] = 0xFF;
       m_data[1] = 0;
       // TODO CRC 1-on, 0-off
-      // send_data(2, SD_STATE_STBY); // WKT - was this before
       send_data(2, SD_STATE_IDLE);
       break;
 
@@ -509,7 +501,7 @@ static void do_command() {
 
     if (clean_cmd) {
       for (uint8_t i = 0; i < 6; i++) {
-	m_cmd[i] = 0xff;
+	m_cmd[i] = 0xFF;
       }
     }
   }
